@@ -13,7 +13,7 @@ concurrency:
 
 env:
   AWS_REGION: ap-south-1
-  EC2_SECURITY_GROUP_ID: sg-04a40ed626d65b3f5
+  EC2_SECURITY_GROUP_ID: sg-0e61f7d982dabb8ca
 
 jobs:
   deploy:
