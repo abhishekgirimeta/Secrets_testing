@@ -17,7 +17,7 @@ env:
 
 jobs:
   deploy:
-    name: Test Temporary SSH Access
+    name: Install Docker and Deploy Nginx
     runs-on: ubuntu-latest
 
     steps:
@@ -29,26 +29,28 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 2. Get GitHub runner public IP
-      # 3. Temporarily allow SSH from that IP
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      # 2. Temporarily allow GitHub runner IP
       - name: Allow temporary SSH access
         id: ssh-rule
         shell: bash
         run: |
           set -euo pipefail
 
-          RUNNER_IP=$(curl -fsS https://checkip.amazonaws.com | tr -d '\n')
+          RUNNER_IP=$(curl -fsS https://checkip.amazonaws.com | tr -d '\r\n')
           RUNNER_CIDR="${RUNNER_IP}/32"
 
           echo "GitHub Runner IP: ${RUNNER_IP}"
 
           EXISTING_RULE=$(aws ec2 describe-security-group-rules \
             --filters "Name=group-id,Values=${EC2_SECURITY_GROUP_ID}" \
-            --query "SecurityGroupRules[?IpProtocol=='tcp' && FromPort==\`22\` && ToPort==\`22\` && CidrIpv4=='${RUNNER_CIDR}'].SecurityGroupRuleId | [0]" \
+            --query "SecurityGroupRules[?IpProtocol=='tcp' && FromPort==22 && ToPort==22 && CidrIpv4=='${RUNNER_CIDR}'].SecurityGroupRuleId | [0]" \
             --output text)
 
-          if [[ "$EXISTING_RULE" != "None" && -n "$EXISTING_RULE" ]]; then
-            echo "SSH rule already exists. Leaving it unchanged."
+          if [[ -n "$EXISTING_RULE" && "$EXISTING_RULE" != "None" ]]; then
+            echo "SSH rule already exists."
             echo "rule_id=" >> "$GITHUB_OUTPUT"
           else
             RULE_ID=$(aws ec2 authorize-security-group-ingress \
@@ -59,42 +61,83 @@ jobs:
               --query 'SecurityGroupRules[0].SecurityGroupRuleId' \
               --output text)
 
-            echo "Created temporary SSH rule: ${RULE_ID}"
-            echo "rule_id=${RULE_ID}" >> "$GITHUB_OUTPUT"
+            echo "Created SSH rule: $RULE_ID"
+            echo "rule_id=$RULE_ID" >> "$GITHUB_OUTPUT"
           fi
 
-      # 4. Connect to EC2 and deploy test application
-      - name: Deploy Nginx test application
+      # 3. SSH into EC2, install Docker and deploy Nginx
+      - name: Install Docker and deploy Nginx
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: 22
+          command_timeout: 15m
           script: |
-            set -e
+            set -eu
 
             echo "Connected to EC2 successfully"
 
-            docker pull nginx:alpine
+            # Install Docker and curl if missing
+            if ! command -v docker >/dev/null 2>&1 || \
+               ! command -v curl >/dev/null 2>&1; then
 
-            docker rm -f temporary-test-app || true
+              echo "Installing Docker and curl..."
 
-            docker run -d \
+              sudo -n apt-get update
+              sudo -n apt-get install -y docker.io curl
+            fi
+
+            # Start Docker service
+            echo "Starting Docker service..."
+
+            sudo -n systemctl enable --now docker
+
+            # Verify Docker installation
+            echo "Docker version:"
+            sudo docker --version
+
+            # Pull Nginx image
+            echo "Pulling Nginx image..."
+
+            sudo docker pull nginx:alpine
+
+            # Remove previous test container if present
+            echo "Removing old test container..."
+
+            sudo docker rm -f temporary-test-app 2>/dev/null || true
+
+            # Run Nginx
+            echo "Starting Nginx container..."
+
+            sudo docker run -d \
               --name temporary-test-app \
               --restart unless-stopped \
               -p 8080:80 \
               nginx:alpine
 
+            # Wait for application
             echo "Waiting for Nginx..."
 
-            sleep 5
+            for attempt in $(seq 1 15); do
+              if curl -fsS http://127.0.0.1:8080/ >/dev/null; then
+                break
+              fi
 
-            curl -f http://127.0.0.1:8080
+              sleep 2
+            done
 
-            echo "Nginx test application deployed successfully"
+            # Verify application
+            echo "Testing Nginx..."
 
-      # 5. Remove only the temporary rule created by this workflow
+            curl -fsS http://127.0.0.1:8080/ >/dev/null
+
+            echo "Nginx deployed successfully!"
+
+            sudo docker ps --filter name=temporary-test-app
+
+      # 4. Remove temporary SSH rule
       - name: Remove temporary SSH access
         if: always() && steps.ssh-rule.outputs.rule_id != ''
         shell: bash
@@ -107,4 +150,4 @@ jobs:
             --group-id "$EC2_SECURITY_GROUP_ID" \
             --security-group-rule-ids "${{ steps.ssh-rule.outputs.rule_id }}"
 
-          echo "Temporary SSH rule removed successfully"
+          echo "Temporary SSH rule removed successfully."
