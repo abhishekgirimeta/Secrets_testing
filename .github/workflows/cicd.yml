@@ -38,17 +38,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
+      
           RUNNER_IP=$(curl -fsS https://checkip.amazonaws.com | tr -d '\r\n')
           RUNNER_CIDR="${RUNNER_IP}/32"
-
+      
           echo "GitHub Runner IP: ${RUNNER_IP}"
-
+      
           EXISTING_RULE=$(aws ec2 describe-security-group-rules \
             --filters "Name=group-id,Values=${EC2_SECURITY_GROUP_ID}" \
-            --query "SecurityGroupRules[?IpProtocol=='tcp' && FromPort==22 && ToPort==22 && CidrIpv4=='${RUNNER_CIDR}'].SecurityGroupRuleId | [0]" \
+            --query "SecurityGroupRules[?IpProtocol=='tcp' && FromPort==\`22\` && ToPort==\`22\` && CidrIpv4=='${RUNNER_CIDR}'].SecurityGroupRuleId | [0]" \
             --output text)
-
+      
           if [[ -n "$EXISTING_RULE" && "$EXISTING_RULE" != "None" ]]; then
             echo "SSH rule already exists."
             echo "rule_id=" >> "$GITHUB_OUTPUT"
@@ -60,7 +60,7 @@ jobs:
               --cidr "$RUNNER_CIDR" \
               --query 'SecurityGroupRules[0].SecurityGroupRuleId' \
               --output text)
-
+      
             echo "Created SSH rule: $RULE_ID"
             echo "rule_id=$RULE_ID" >> "$GITHUB_OUTPUT"
           fi
