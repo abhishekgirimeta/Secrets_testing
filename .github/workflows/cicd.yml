@@ -99,7 +99,12 @@ jobs:
         if: always() && steps.ssh-rule.outputs.rule_id != ''
         shell: bash
         run: |
+          set -euo pipefail
+
+          echo "Removing temporary SSH rule..."
+
           aws ec2 revoke-security-group-ingress \
+            --group-id "$EC2_SECURITY_GROUP_ID" \
             --security-group-rule-ids "${{ steps.ssh-rule.outputs.rule_id }}"
 
-          echo "Temporary SSH rule removed"
+          echo "Temporary SSH rule removed successfully"
